@@ -1,0 +1,5 @@
+{
+  "name": "TranscreveAI",
+  "description": "Uma aplicação web moderna para transcrição de áudio e vídeo com extração de destaques usando IA.",
+  "requestFramePermissions": []
+}
