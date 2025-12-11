@@ -1,8 +1,11 @@
-import React, { useState } from 'react';
-import { AppStatus, FileData, ProcessingState } from './types';
+import React, { useState, useEffect } from 'react';
+import { AppStatus, FileData, ProcessingState, HistoryItem, TranscriptionResult } from './types';
 import UploadArea from './components/UploadArea';
 import ResultDisplay from './components/ResultDisplay';
+import HistorySidebar from './components/HistorySidebar';
 import { transcribeMedia } from './services/geminiService';
+
+const HISTORY_KEY = 'transcreveai_history_v1';
 
 const App: React.FC = () => {
   const [fileData, setFileData] = useState<FileData | null>(null);
@@ -11,6 +14,57 @@ const App: React.FC = () => {
     progress: 0,
     message: ''
   });
+  
+  // History State
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
+  // Load history on mount
+  useEffect(() => {
+    const saved = localStorage.getItem(HISTORY_KEY);
+    if (saved) {
+      try {
+        setHistory(JSON.parse(saved));
+      } catch (e) {
+        console.error("Failed to parse history", e);
+      }
+    }
+  }, []);
+
+  const saveToHistory = (filename: string, result: TranscriptionResult) => {
+    const newItem: HistoryItem = {
+      id: crypto.randomUUID(),
+      timestamp: Date.now(),
+      filename,
+      result
+    };
+    
+    const updatedHistory = [newItem, ...history];
+    // Limit to 20 items to avoid localStorage limits with large text
+    if (updatedHistory.length > 20) updatedHistory.pop();
+    
+    setHistory(updatedHistory);
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
+  };
+
+  const handleDeleteHistory = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const updated = history.filter(item => item.id !== id);
+    setHistory(updated);
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
+  };
+
+  const handleSelectHistory = (item: HistoryItem) => {
+    // Reset file input visual but load the result
+    setFileData(null); 
+    setState({
+      status: AppStatus.COMPLETED,
+      progress: 100,
+      message: `Carregado do histórico: ${item.filename}`,
+      result: item.result
+    });
+    setIsSidebarOpen(false);
+  };
 
   const handleFileSelect = (data: FileData) => {
     setFileData(data);
@@ -24,35 +78,47 @@ const App: React.FC = () => {
   const handleProcess = async () => {
     if (!fileData?.file) return;
 
+    // Iniciar com 0%
     setState({
-      status: AppStatus.UPLOADING,
-      progress: 10,
-      message: 'Preparando arquivo para envio...'
+      status: AppStatus.PROCESSING,
+      progress: 0,
+      message: 'Iniciando processamento...'
     });
 
-    try {
-      // Simulation of upload progress (since we use base64 mostly for this demo structure)
-      // For a real huge file app, we'd use XHR upload progress here.
-      const interval = setInterval(() => {
-        setState(prev => {
-           if (prev.status !== AppStatus.UPLOADING && prev.status !== AppStatus.PROCESSING) return prev;
-           const newProgress = prev.progress + (prev.status === AppStatus.UPLOADING ? 2 : 0.5);
-           return {
-             ...prev,
-             progress: Math.min(newProgress, 90)
-           };
-        });
-      }, 500);
+    // Intervalo para simular progresso suave
+    const interval = setInterval(() => {
+      setState(prev => {
+        if (prev.status !== AppStatus.PROCESSING) return prev;
 
-      setState({
-        status: AppStatus.PROCESSING,
-        progress: 30,
-        message: 'A IA do Gemini está analisando o áudio...'
+        // Lógica de progressão dinâmica:
+        // Rápido no início (leitura/upload), mais lento no final (processamento IA)
+        let increment = 0;
+        const current = prev.progress;
+
+        if (current < 20) increment = 2;        // 0-20%: Rápido (Lendo arquivo)
+        else if (current < 50) increment = 0.8; // 20-50%: Médio (Enviando)
+        else if (current < 80) increment = 0.3; // 50-80%: Lento (Processando)
+        else if (current < 95) increment = 0.05;// 80-95%: Muito lento (Finalizando)
+        else increment = 0;                     // Trava em 95% até concluir
+
+        return {
+          ...prev,
+          progress: Math.min(current + increment, 95),
+          message: current < 25 
+            ? 'Lendo arquivo de mídia...' 
+            : current < 50 
+              ? 'Enviando para o Gemini...' 
+              : 'A IA está transcrevendo e gerando destaques...'
+        };
       });
+    }, 100);
 
+    try {
       const result = await transcribeMedia(fileData.file);
       
       clearInterval(interval);
+      
+      saveToHistory(fileData.file.name, result);
 
       setState({
         status: AppStatus.COMPLETED,
@@ -62,6 +128,7 @@ const App: React.FC = () => {
       });
 
     } catch (error: any) {
+      clearInterval(interval);
       setState({
         status: AppStatus.ERROR,
         progress: 0,
@@ -81,27 +148,43 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-200 selection:bg-indigo-500/30">
+    <div className="min-h-screen bg-slate-900 text-slate-200 selection:bg-indigo-500/30 font-inter">
       {/* Background decoration */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-indigo-500/10 rounded-full blur-[128px]"></div>
         <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-emerald-500/10 rounded-full blur-[128px]"></div>
       </div>
 
+      <HistorySidebar 
+        isOpen={isSidebarOpen}
+        onClose={() => setIsSidebarOpen(false)}
+        history={history}
+        onSelect={handleSelectHistory}
+        onDelete={handleDeleteHistory}
+      />
+
       <main className="relative container mx-auto px-4 py-12 max-w-4xl">
         {/* Header */}
-        <header className="text-center mb-12">
+        <header className="flex flex-col items-center mb-12 relative">
+          <button
+            onClick={() => setIsSidebarOpen(true)}
+            className="absolute right-0 top-0 md:top-2 p-2.5 bg-slate-800/80 hover:bg-slate-700 text-slate-300 rounded-xl border border-slate-700/50 backdrop-blur transition-all flex items-center gap-2 group"
+          >
+            <svg className="w-5 h-5 group-hover:text-indigo-400 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+            <span className="hidden sm:inline text-sm font-medium">Histórico</span>
+          </button>
+
           <div className="inline-flex items-center justify-center p-2 mb-4 bg-slate-800/50 rounded-xl border border-slate-700 backdrop-blur-md">
             <span className="text-xs font-semibold px-3 py-1 bg-gradient-to-r from-indigo-500 to-purple-500 rounded-lg text-white">
               Powered by Gemini 2.5
             </span>
           </div>
-          <h1 className="text-4xl md:text-5xl font-bold bg-clip-text text-transparent bg-gradient-to-b from-white to-slate-400 mb-4">
+          <h1 className="text-4xl md:text-5xl font-bold bg-clip-text text-transparent bg-gradient-to-b from-white to-slate-400 mb-4 text-center">
             Transcreve<span className="text-indigo-400">AI</span>
           </h1>
-          <p className="text-lg text-slate-400 max-w-xl mx-auto">
+          <p className="text-lg text-slate-400 max-w-xl mx-auto text-center">
             Transforme seus áudios e vídeos em texto instantaneamente. 
-            Obtenha transcrições precisas, destaques inteligentes e resumos em segundos.
+            Obtenha transcrições precisas, destaques inteligentes e resumos.
           </p>
         </header>
 

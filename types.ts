@@ -25,3 +25,10 @@ export interface FileData {
   previewUrl: string | null;
   mimeType: string;
 }
+
+export interface HistoryItem {
+  id: string;
+  timestamp: number;
+  filename: string;
+  result: TranscriptionResult;
+}
